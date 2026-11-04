@@ -1,330 +1,225 @@
-"""
-Módulo de utilidades para el proyecto Adult Income ML.
-Contiene funciones de carga, preprocesamiento, entrenamiento y evaluación.
-"""
+"""Funciones compartidas para el proyecto Adult Income."""
 
-import pandas as pd
-import numpy as np
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LogisticRegression
-from sklearn.dummy import DummyClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report
-)
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Iterable
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-import warnings
-warnings.filterwarnings('ignore')
+from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.tree import DecisionTreeClassifier
 
 
-# =============================================================================
-# CARGA DE DATOS
-# =============================================================================
-
-def cargar_datos():
-    """
-    Descarga el dataset Adult Income desde UCI ML Repository.
-    Retorna un DataFrame limpio con columnas nombradas.
-    """
-    try:
-        from ucimlrepo import fetch_ucirepo
-        adult = fetch_ucirepo(id=2)
-        X = adult.data.features
-        y = adult.data.targets
-        df = pd.concat([X, y], axis=1)
-        # Normalizar nombre de la columna objetivo
-        if 'income' in df.columns:
-            df = df.rename(columns={'income': 'income_raw'})
-        elif 'Income' in df.columns:
-            df = df.rename(columns={'Income': 'income_raw'})
-        else:
-            # Última columna es el objetivo
-            cols = df.columns.tolist()
-            df = df.rename(columns={cols[-1]: 'income_raw'})
-        # Crear columna binaria: 1 si >50K, 0 si <=50K
-        df['objetivo'] = df['income_raw'].apply(
-            lambda x: 1 if '>50K' in str(x) else 0
-        )
-        return df
-    except Exception as e:
-        print(f"Error cargando datos desde UCI: {e}")
-        print("Intentando carga alternativa desde URL directa...")
-        return _cargar_datos_url()
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_PATH = ROOT_DIR / "data" / "adult_income.csv"
+RANDOM_STATE = 42
 
 
-def _cargar_datos_url():
-    """Carga alternativa del dataset desde URL directa."""
-    columnas = [
-        'age', 'workclass', 'fnlwgt', 'education', 'education-num',
-        'marital-status', 'occupation', 'relationship', 'race', 'sex',
-        'capital-gain', 'capital-loss', 'hours-per-week', 'native-country',
-        'income'
-    ]
-    url_train = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
-    url_test = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.test"
+def preparar_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza los nombres, faltantes y etiqueta del dataset UCI Adult."""
+    df = df.copy()
+    df.columns = [str(col).strip() for col in df.columns]
 
-    df_train = pd.read_csv(url_train, names=columnas, sep=', ', engine='python',
-                           skipinitialspace=True, na_values='?')
-    df_test = pd.read_csv(url_test, names=columnas, sep=', ', engine='python',
-                          skipinitialspace=True, na_values='?', skiprows=1)
-    df = pd.concat([df_train, df_test], ignore_index=True)
-    df = df.rename(columns={'income': 'income_raw'})
-    df['objetivo'] = df['income_raw'].apply(
-        lambda x: 1 if '>50K' in str(x) else 0
+    objetivo = next(
+        (col for col in df.columns if col.lower() in {"income", "income_raw", "class"}),
+        None,
     )
+    if objetivo is None:
+        raise ValueError("No se encontró la columna de ingresos (income) en el dataset.")
+
+    if objetivo != "income_raw":
+        df = df.rename(columns={objetivo: "income_raw"})
+    df["income_raw"] = df["income_raw"].astype("string").str.strip().str.rstrip(".")
+    df["objetivo"] = df["income_raw"].str.contains(">50K", regex=False, na=False).astype("int8")
+
+    # UCI representa algunos datos ausentes con el texto "?".
+    for col in df.select_dtypes(include=["object", "string"]).columns:
+        valores = df[col].astype("object")
+        df[col] = valores.map(
+            lambda value: np.nan if pd.isna(value) or str(value).strip() == "?" else str(value).strip()
+        )
     return df
 
 
-def guardar_datos(df, ruta='data/adult_income.csv'):
-    """Guarda el DataFrame procesado en disco."""
-    df.to_csv(ruta, index=False)
-    print(f"Dataset guardado en: {ruta}")
+def cargar_datos(ruta: str | Path = DATA_PATH) -> pd.DataFrame:
+    """Carga la copia local del dataset; no realiza conexiones de red implícitas."""
+    ruta = Path(ruta)
+    if not ruta.is_absolute():
+        ruta = ROOT_DIR / ruta
+    if not ruta.exists():
+        raise FileNotFoundError(
+            f"No se encontró {ruta}. Descarga primero el dataset con "
+            "python data/descargar_datos.py."
+        )
+    return preparar_dataset(pd.read_csv(ruta, na_values=["?"]))
 
 
-# =============================================================================
-# PREPROCESAMIENTO
-# =============================================================================
-
-def obtener_features_y_objetivo(df):
-    """
-    Separa las features del objetivo.
-    Retorna X (features), y (objetivo).
-    """
-    columnas_excluir = ['objetivo', 'income_raw', 'fnlwgt']
-    columnas_features = [c for c in df.columns if c not in columnas_excluir]
-    X = df[columnas_features].copy()
-    y = df['objetivo'].copy()
-    return X, y
+def guardar_datos(df: pd.DataFrame, ruta: str | Path = DATA_PATH) -> Path:
+    """Guarda el dataset en una ruta estable dentro del proyecto."""
+    ruta = Path(ruta)
+    if not ruta.is_absolute():
+        ruta = ROOT_DIR / ruta
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    preparar_dataset(df).to_csv(ruta, index=False)
+    return ruta
 
 
-def identificar_columnas(X):
-    """Identifica columnas numéricas y categóricas."""
-    numericas = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    categoricas = X.select_dtypes(include=['object', 'category']).columns.tolist()
+def obtener_features_y_objetivo(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """Separa predictores y etiqueta; excluye identificador de peso fnlwgt."""
+    if "objetivo" not in df.columns:
+        df = preparar_dataset(df)
+    excluir = {"objetivo", "income_raw", "fnlwgt"}
+    features = [col for col in df.columns if col not in excluir]
+    return df[features].copy(), df["objetivo"].astype("int8").copy()
+
+
+def identificar_columnas(X: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Retorna nombres de columnas numéricas y categóricas."""
+    numericas = X.select_dtypes(include=["number"]).columns.tolist()
+    categoricas = [col for col in X.columns if col not in numericas]
     return numericas, categoricas
 
 
-def construir_pipeline(tipo='logistica'):
-    """
-    Construye un Pipeline de scikit-learn con preprocesamiento y modelo.
-
-    Parámetros
-    ----------
-    tipo : str
-        'logistica' para Regresión Logística
-        'arbol' para Árbol de Decisión
-        'dummy' para DummyClassifier (baseline)
-
-    Retorna
-    -------
-    modelo : estimador sklearn
-    """
-    if tipo == 'logistica':
-        modelo = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
-    elif tipo == 'arbol':
-        modelo = DecisionTreeClassifier(max_depth=5, random_state=42, class_weight='balanced')
-    elif tipo == 'dummy':
-        modelo = DummyClassifier(strategy='most_frequent', random_state=42)
-    else:
-        raise ValueError(f"Tipo de modelo no reconocido: {tipo}")
-
-    return modelo
+def construir_estimador(tipo: str = "logistica"):
+    """Construye el clasificador solicitado, con semilla fija."""
+    if tipo == "logistica":
+        return LogisticRegression(max_iter=1000, random_state=RANDOM_STATE, class_weight="balanced")
+    if tipo == "arbol":
+        return DecisionTreeClassifier(max_depth=5, random_state=RANDOM_STATE, class_weight="balanced")
+    if tipo == "dummy":
+        return DummyClassifier(strategy="most_frequent", random_state=RANDOM_STATE)
+    raise ValueError(f"Tipo de modelo no reconocido: {tipo}")
 
 
-def construir_pipeline_completo(numericas, categoricas, tipo='logistica'):
-    """
-    Construye el Pipeline completo con preprocesamiento y modelo especificado.
-
-    Parámetros
-    ----------
-    numericas : list de str
-        Nombres de columnas numéricas.
-    categoricas : list de str
-        Nombres de columnas categóricas.
-    tipo : str
-        Tipo de modelo: 'logistica', 'arbol', 'dummy'.
-
-    Retorna
-    -------
-    Pipeline : sklearn.pipeline.Pipeline
-    """
-    transformador_numerico = Pipeline(steps=[
-        ('escalador', StandardScaler())
-    ])
-    transformador_categorico = Pipeline(steps=[
-        ('codificador', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
-
+def construir_pipeline_completo(
+    numericas: Iterable[str], categoricas: Iterable[str], tipo: str = "logistica"
+) -> Pipeline:
+    """Crea un pipeline que ajusta imputación, codificación y escala solo en train."""
+    transformador_numerico = Pipeline(
+        steps=[("imputador", SimpleImputer(strategy="median")), ("escalador", StandardScaler())]
+    )
+    transformador_categorico = Pipeline(
+        steps=[
+            ("imputador", SimpleImputer(strategy="most_frequent")),
+            ("codificador", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
     preprocesador = ColumnTransformer(
         transformers=[
-            ('num', transformador_numerico, numericas),
-            ('cat', transformador_categorico, categoricas)
+            ("numericas", transformador_numerico, list(numericas)),
+            ("categoricas", transformador_categorico, list(categoricas)),
         ],
-        remainder='drop'
+        remainder="drop",
+    )
+    return Pipeline(
+        steps=[("preprocesamiento", preprocesador), ("modelo", construir_estimador(tipo))]
     )
 
-    if tipo == 'logistica':
-        modelo = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
-    elif tipo == 'arbol':
-        modelo = DecisionTreeClassifier(max_depth=5, random_state=42, class_weight='balanced')
-    elif tipo == 'dummy':
-        modelo = DummyClassifier(strategy='most_frequent', random_state=42)
-    else:
-        raise ValueError(f"Tipo de modelo no reconocido: {tipo}")
 
-    pipeline = Pipeline(steps=[
-        ('preprocesador', preprocesador),
-        ('modelo', modelo)
-    ])
-
-    return pipeline
-
-
-# =============================================================================
-# EVALUACIÓN
-# =============================================================================
-
-def calcular_metricas(y_true, y_pred, nombre_modelo='Modelo'):
-    """
-    Calcula Accuracy, Precision, Recall y F1-Score.
-
-    Retorna
-    -------
-    dict con las métricas.
-    """
-    metricas = {
-        'Modelo': nombre_modelo,
-        'Accuracy': round(accuracy_score(y_true, y_pred), 4),
-        'Precision': round(precision_score(y_true, y_pred, zero_division=0), 4),
-        'Recall': round(recall_score(y_true, y_pred, zero_division=0), 4),
-        'F1-Score': round(f1_score(y_true, y_pred, zero_division=0), 4),
+def calcular_metricas(y_true, y_pred, nombre_modelo: str = "Modelo") -> dict[str, float | str]:
+    """Calcula métricas de clasificación para la clase positiva >50K."""
+    return {
+        "Modelo": nombre_modelo,
+        "Accuracy": round(accuracy_score(y_true, y_pred), 4),
+        "Precision": round(precision_score(y_true, y_pred, zero_division=0), 4),
+        "Recall": round(recall_score(y_true, y_pred, zero_division=0), 4),
+        "F1-Score": round(f1_score(y_true, y_pred, zero_division=0), 4),
     }
-    return metricas
 
 
-def tabla_comparativa(lista_metricas):
-    """
-    Genera un DataFrame comparativo de métricas para varios modelos.
-
-    Parámetros
-    ----------
-    lista_metricas : list de dict
-        Lista de diccionarios retornados por calcular_metricas().
-
-    Retorna
-    -------
-    pd.DataFrame con las métricas comparadas.
-    """
-    df = pd.DataFrame(lista_metricas)
-    df = df.set_index('Modelo')
-    return df
+def tabla_comparativa(lista_metricas: list[dict]) -> pd.DataFrame:
+    """Construye una tabla indexada por el nombre del modelo."""
+    return pd.DataFrame(lista_metricas).set_index("Modelo")
 
 
-def graficar_confusion(y_true, y_pred, nombre_modelo='Modelo', ruta_guardado=None):
-    """
-    Genera y opcionalmente guarda la matriz de confusión.
-
-    Parámetros
-    ----------
-    y_true : array-like
-    y_pred : array-like
-    nombre_modelo : str
-    ruta_guardado : str o None
-    """
-    cm = confusion_matrix(y_true, y_pred)
-    etiquetas = ['≤50K (Neg)', '>50K (Pos)']
-
-    fig, ax = plt.subplots(figsize=(6, 5))
+def graficar_confusion(y_true, y_pred, nombre_modelo="Modelo", ruta_guardado=None):
+    """Dibuja una matriz con orden de etiquetas fijo: <=50K y >50K."""
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    etiquetas = ["<=50K (negativo)", ">50K (positivo)"]
+    fig, ax = plt.subplots(figsize=(6.8, 5.2))
     sns.heatmap(
-        cm, annot=True, fmt='d', cmap='Blues',
-        xticklabels=etiquetas, yticklabels=etiquetas,
-        ax=ax
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=etiquetas,
+        yticklabels=etiquetas,
+        cbar=False,
+        ax=ax,
     )
-    ax.set_title(f'Matriz de Confusión — {nombre_modelo}', fontsize=14, pad=15)
-    ax.set_ylabel('Etiqueta Real', fontsize=12)
-    ax.set_xlabel('Etiqueta Predicha', fontsize=12)
-
-    # Anotar cuadrantes
-    n = cm.shape[0]
-    for i in range(n):
-        for j in range(n):
-            if i == 0 and j == 0:
-                tipo = 'VN'
-            elif i == 0 and j == 1:
-                tipo = 'FP'
-            elif i == 1 and j == 0:
-                tipo = 'FN'
-            else:
-                tipo = 'VP'
-            ax.text(j + 0.5, i + 0.75, tipo, ha='center', va='center',
-                    fontsize=9, color='gray')
-
-    plt.tight_layout()
+    ax.set_title(f"Matriz de confusión - {nombre_modelo}")
+    ax.set_xlabel("Predicción")
+    ax.set_ylabel("Valor real")
+    fig.tight_layout()
     if ruta_guardado:
-        plt.savefig(ruta_guardado, dpi=150, bbox_inches='tight')
-        print(f"Matriz guardada en: {ruta_guardado}")
+        destino = Path(ruta_guardado)
+        if not destino.is_absolute():
+            destino = ROOT_DIR / destino
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(destino, dpi=160, bbox_inches="tight")
     return fig, cm
 
 
-# =============================================================================
-# ANÁLISIS ÉTICO
-# =============================================================================
+def crear_grupo_edad(edad: float) -> str:
+    """Agrupa edades para la auditoría descriptiva de equidad."""
+    if edad < 30:
+        return "18-29"
+    if edad < 40:
+        return "30-39"
+    if edad < 50:
+        return "40-49"
+    if edad < 60:
+        return "50-59"
+    return "60+"
 
-def metricas_por_grupo(df_test, y_true, y_pred, columna_grupo):
-    """
-    Calcula recall y tasa de positivos predichos por grupo demográfico.
 
-    Parámetros
-    ----------
-    df_test : pd.DataFrame con los datos de prueba (con columna de grupo)
-    y_true : pd.Series con etiquetas reales
-    y_pred : array con predicciones
-    columna_grupo : str nombre de la columna de agrupación
-
-    Retorna
-    -------
-    pd.DataFrame con métricas por grupo.
-    """
-    df_eval = df_test[[columna_grupo]].copy().reset_index(drop=True)
-    df_eval['y_true'] = y_true.reset_index(drop=True)
-    df_eval['y_pred'] = y_pred
-
+def metricas_por_grupo(df_test, y_true, y_pred, columna_grupo: str) -> pd.DataFrame:
+    """Calcula tamaño, recall y tasas positivas por cada grupo demográfico."""
+    eval_df = pd.DataFrame(
+        {
+            "grupo": df_test[columna_grupo].reset_index(drop=True),
+            "real": pd.Series(y_true).reset_index(drop=True),
+            "predicho": np.asarray(y_pred),
+        }
+    )
     resultados = []
-    for grupo, grp_df in df_eval.groupby(columna_grupo):
-        yt = grp_df['y_true']
-        yp = grp_df['y_pred']
-        n = len(yt)
-        tasa_pos_real = yt.mean()
-        tasa_pos_pred = yp.mean()
-        rec = recall_score(yt, yp, zero_division=0)
-        prec = precision_score(yt, yp, zero_division=0)
-        f1 = f1_score(yt, yp, zero_division=0)
-        resultados.append({
-            'Grupo': grupo,
-            'N': n,
-            'Tasa_Positivos_Real': round(tasa_pos_real, 4),
-            'Tasa_Positivos_Predicha': round(tasa_pos_pred, 4),
-            'Recall': round(rec, 4),
-            'Precision': round(prec, 4),
-            'F1-Score': round(f1, 4),
-        })
-
+    for grupo, datos in eval_df.groupby("grupo", dropna=False, observed=True):
+        positivos_reales = int(datos["real"].sum())
+        resultados.append(
+            {
+                "Grupo": "Sin dato" if pd.isna(grupo) else str(grupo),
+                "N": len(datos),
+                "Tasa_Positivos_Real": round(float(datos["real"].mean()), 4),
+                "Tasa_Positivos_Predicha": round(float(datos["predicho"].mean()), 4),
+                "Recall": round(
+                    recall_score(datos["real"], datos["predicho"], zero_division=0), 4
+                ),
+                "Precision": round(
+                    precision_score(datos["real"], datos["predicho"], zero_division=0), 4
+                ),
+                "F1-Score": round(f1_score(datos["real"], datos["predicho"], zero_division=0), 4),
+                "Positivos_Reales": positivos_reales,
+            }
+        )
     return pd.DataFrame(resultados)
 
 
-def crear_grupo_edad(edad):
-    """Clasifica la edad en rangos para análisis ético."""
-    if edad < 30:
-        return '18-29'
-    elif edad < 40:
-        return '30-39'
-    elif edad < 50:
-        return '40-49'
-    elif edad < 60:
-        return '50-59'
-    else:
-        return '60+'
+def diferencia_max_min(tabla: pd.DataFrame, metrica: str) -> float:
+    """Calcula max-min de una métrica grupal disponible."""
+    valores = pd.to_numeric(tabla[metrica], errors="coerce").dropna()
+    return round(float(valores.max() - valores.min()), 4) if len(valores) else float("nan")

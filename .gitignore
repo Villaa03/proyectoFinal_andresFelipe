@@ -1,0 +1,47 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.eggs/
+dist/
+build/
+*.egg-info/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Data files (too large for Git)
+data/*.csv
+data/*.xlsx
+
+# Versionar métricas y salidas visibles del análisis; mantener fuera la copia fuente.
+!data/tabla_metricas.csv
+!data/metricas_por_*.csv
+
+# Generated figures (regenerables)
+data/*.png
+!data/confusion_*.png
+!data/balance_clases.png
+!data/correlacion.png
+
+# Local environments and temporary PDF renders
+.venv/
+.ipython/
+.jupyter/
+tmp/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
