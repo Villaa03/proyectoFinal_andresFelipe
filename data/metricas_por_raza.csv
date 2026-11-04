@@ -1,0 +1,6 @@
+﻿Grupo,N,Tasa_Positivos_Real,Tasa_Positivos_Predicha,Recall,Precision,F1-Score,Positivos_Reales
+Amer-Indian-Eskimo,104,0.0865,0.2019,0.6667,0.2857,0.4,9
+Asian-Pac-Islander,304,0.2566,0.4046,0.8462,0.5366,0.6567,78
+Black,944,0.1282,0.1515,0.6529,0.5524,0.5985,121
+Other,69,0.1594,0.1884,0.6364,0.5385,0.5833,11
+White,8348,0.2538,0.3803,0.849,0.5666,0.6796,2119
