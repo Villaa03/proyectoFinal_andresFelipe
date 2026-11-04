@@ -1,0 +1,4 @@
+﻿Modelo,Accuracy,Precision,Recall,F1-Score
+Regresión Logística,0.8056,0.5632,0.837,0.6733
+Árbol de Decisión,0.7806,0.5248,0.8824,0.6582
+Baseline (DummyClassifier),0.7607,0.0,0.0,0.0
